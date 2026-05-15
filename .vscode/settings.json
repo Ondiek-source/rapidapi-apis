@@ -2,5 +2,12 @@
     "sonarlint.connectedMode.project": {
         "connectionId": "ondiek-source",
         "projectKey": "Ondiek-source_rapidapi-apis"
-    }
+    },
+    "azureFunctions.deploySubpath": "motivational-insult",
+    "azureFunctions.postDeployTask": "npm install (functions)",
+    "azureFunctions.projectLanguage": "TypeScript",
+    "azureFunctions.projectRuntime": "~4",
+    "debug.internalConsoleOptions": "neverOpen",
+    "azureFunctions.projectLanguageModel": 4,
+    "azureFunctions.preDeployTask": "npm prune (functions)"
 }
