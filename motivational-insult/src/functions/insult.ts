@@ -35,9 +35,10 @@ const insults: string[] = [
 
 export async function insultHandler(request: HttpRequest, context: InvocationContext): Promise<HttpResponseInit> {
   const proxySecret = request.headers.get('x-rapidapi-proxy-secret');
-  const expectedSecret = process.env.RAPIDAPI_PROXY_SECRET || '';
+  const expectedSecret = process.env.RAPIDAPI_PROXY_SECRET;
 
-  if (!proxySecret || proxySecret !== expectedSecret) {
+  // Reject if secret env var is not configured, or header doesn't match
+  if (!expectedSecret || !proxySecret || proxySecret !== expectedSecret) {
     return {
       status: 401,
       headers: { 'Content-Type': 'application/json' },
@@ -58,8 +59,24 @@ export async function insultHandler(request: HttpRequest, context: InvocationCon
   };
 }
 
+// RapidAPI health check endpoint — no auth, just confirms the service is alive
+export async function healthHandler(_request: HttpRequest, _context: InvocationContext): Promise<HttpResponseInit> {
+  return {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'ok' })
+  };
+}
+
 app.http('insult', {
   methods: ['GET'],
   authLevel: 'anonymous',
   handler: insultHandler
+});
+
+app.http('health', {
+  methods: ['GET'],
+  route: 'health',
+  authLevel: 'anonymous',
+  handler: healthHandler
 });

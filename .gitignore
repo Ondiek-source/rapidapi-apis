@@ -38,6 +38,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+**/.env
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -48,3 +49,15 @@ __pycache__/
 __blobstorage__
 __queuestorage__
 __azurite_db*__.json
+
+# Dependencies
+node_modules
+**/node_modules
+
+# Build output
+dist
+**/dist
+
+# Azure Functions local settings
+local.settings.json
+**/local.settings.json
