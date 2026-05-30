@@ -4,8 +4,10 @@
 # Loops through all subfolders, deploys each as a separate Function App.
 # Folder name → fn-rapidapi-<folder-name>
 #
-# Usage:  ./deploy.sh              ← deploys all folders
-#         ./deploy.sh <folder>     ← deploys only that folder
+# Usage:  ./deploy.sh                   ← deploys all NEW folders (skips existing)
+#         ./deploy.sh <folder>          ← deploys only that folder (skips if exists)
+#         ./deploy.sh <folder> --force  ← force redeploy even if exists
+#         FORCE_ALL=true ./deploy.sh    ← force redeploy all
 #
 # Each API folder needs a .env file with at minimum:
 #   RAPIDAPI_PROXY_SECRET=<your-secret-from-rapidapi-gateway>
@@ -17,12 +19,13 @@ set -euo pipefail
 # ──────────────────────────────────────────────
 SUBSCRIPTION_ID="${SUBSCRIPTION_ID:-05bfd83f-202d-4f35-a8dd-4f7525f51434}"
 RESOURCE_GROUP="${RESOURCE_GROUP:-rg-rapidapis}"
-STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-st-$RESOURCE_GROUP-fns-$(date +%s)}"
+STORAGE_ACCOUNT="${STORAGE_ACCOUNT:-stfns147}"
 LOCATION="${LOCATION:-eastus}"
-NODE_VERSION="${NODE_VERSION:-~20}"
-APP_SERVICE_PLAN="${APP_SERVICE_PLAN:-EastUSPlan}"
+NODE_VERSION="${NODE_VERSION:-22}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FORCE=false
+[[ "${2:-}" == "--force" || "${FORCE_ALL:-}" == "true" ]] && FORCE=true
 
 # ──────────────────────────────────────────────
 # HELPERS
@@ -34,7 +37,6 @@ die()     { echo -e "\033[1;31m✖\033[0m  $*" >&2; exit 1; }
 header()  { echo -e "\n\033[1;35m══════════════════════════════════════════\033[0m"; echo -e "\033[1;35m  $*\033[0m"; echo -e "\033[1;35m══════════════════════════════════════════\033[0m"; }
 
 fail() {
-  # fail <folder> <step> <remedy>
   local folder="$1" step="$2" remedy="$3"
   echo -e "\033[1;31m✖  FAILED: $folder @ $step\033[0m" >&2
   echo -e "\033[1;33m   ➜ $remedy\033[0m" >&2
@@ -75,31 +77,6 @@ az group create \
 success "Resource group ready."
 
 # ──────────────────────────────────────────────
-# APP SERVICE PLAN (idempotent)
-# ──────────────────────────────────────────────
-log "Ensuring App Service Plan '$APP_SERVICE_PLAN' exists..."
-EXISTING_PLAN=$(az appservice plan show \
-  --name "$APP_SERVICE_PLAN" \
-  --resource-group "$RESOURCE_GROUP" \
-  --query "name" -o tsv 2>/dev/null || true)
-
-if [[ -z "$EXISTING_PLAN" ]]; then
-  log "Creating App Service Plan '$APP_SERVICE_PLAN'..."
-  az appservice plan create \
-    --name "$APP_SERVICE_PLAN" \
-    --resource-group "$RESOURCE_GROUP" \
-    --location "$LOCATION" \
-    --sku Y1 \
-    --is-linux \
-    --output none \
-    || die "Could not create App Service Plan '$APP_SERVICE_PLAN'.\
-   ➜ Check your Azure permissions or region availability."
-  success "App Service Plan created."
-else
-  success "App Service Plan already exists — skipping creation."
-fi
-
-# ──────────────────────────────────────────────
 # STORAGE ACCOUNT (idempotent)
 # ──────────────────────────────────────────────
 log "Ensuring storage account '$STORAGE_ACCOUNT' exists..."
@@ -127,7 +104,7 @@ fi
 # ──────────────────────────────────────────────
 declare -a TARGETS=()
 
-if [[ -n "${1:-}" ]]; then
+if [[ -n "${1:-}" && "${1:-}" != "--force" ]]; then
   [[ -d "$ROOT_DIR/$1" ]] || die "Folder '$1' not found.\n   ➜ Run ./bootstrap.sh $1 to create it first."
   TARGETS=("$1")
 else
@@ -147,6 +124,7 @@ log "Found ${#TARGETS[@]} function(s) to process: ${TARGETS[*]}"
 # DEPLOY EACH FUNCTION
 # ──────────────────────────────────────────────
 DEPLOYED=()
+SKIPPED=()
 FAILED=()
 
 deploy_function() {
@@ -183,7 +161,7 @@ deploy_function() {
     fi
   done
 
-  # ── Function App (idempotent) ─────────────────
+  # ── Function App (upsert) ─────────────────────
   log "Checking if '$app_name' exists on Azure..."
   local existing
   existing=$(az functionapp show \
@@ -191,33 +169,38 @@ deploy_function() {
     --resource-group "$RESOURCE_GROUP" \
     --query "name" -o tsv 2>/dev/null || true)
 
+  if [[ -n "$existing" && "$FORCE" == "false" ]]; then
+    success "Function App already exists — skipping (use --force to redeploy)."
+    SKIPPED+=("$folder")
+    return 0
+  fi
+
   if [[ -z "$existing" ]]; then
     log "Creating Function App '$app_name'..."
     az functionapp create \
       --name "$app_name" \
       --resource-group "$RESOURCE_GROUP" \
       --storage-account "$STORAGE_ACCOUNT" \
-      --plan "$APP_SERVICE_PLAN" \
+      --flexconsumption-location "$LOCATION" \
       --runtime node \
       --runtime-version "$NODE_VERSION" \
       --functions-version 4 \
-      --os-type Linux \
       --output none \
-      || { fail "$folder" "az functionapp create" "Check that storage account '$STORAGE_ACCOUNT' and plan '$APP_SERVICE_PLAN' exist in resource group '$RESOURCE_GROUP'."; return 1; }
+      || { fail "$folder" "az functionapp create" "Check that storage account '$STORAGE_ACCOUNT' exists in '$RESOURCE_GROUP' and you have contributor permissions."; return 1; }
     success "Function App created."
   else
-    success "Function App already exists — skipping creation."
+    log "Force redeploy — updating existing Function App '$app_name'..."
   fi
 
-  # ── Azure env vars ────────────────────────────
-  log "Setting RAPIDAPI_PROXY_SECRET on Azure..."
+  # ── Azure app settings ────────────────────────
+  log "Configuring app settings on '$app_name'..."
   az functionapp config appsettings set \
     --name "$app_name" \
     --resource-group "$RESOURCE_GROUP" \
     --settings "RAPIDAPI_PROXY_SECRET=${proxy_secret}" \
     --output none \
     || { fail "$folder" "appsettings set" "Could not set env vars on '$app_name' — check your Azure permissions."; return 1; }
-  success "Azure env vars updated."
+  success "Azure app settings updated."
 
   # ── npm install ───────────────────────────────
   log "Installing dependencies..."
@@ -230,17 +213,69 @@ deploy_function() {
     || { fail "$folder" "npm run build" "TypeScript build failed — check $folder/src for type errors. Run: cd $folder && npm run build"; return 1; }
 
   # ── Publish ───────────────────────────────────
-  log "Publishing '$app_name'..."
-  (cd "$dir" && func azure functionapp publish "$app_name" --typescript) \
-    || { fail "$folder" "func publish" "Publish failed — ensure you're logged in (az login) and '$app_name' exists in Azure portal."; return 1; }
+  log "Publishing '$app_name' (--no-build)..."
+  PUBLISH_OUTPUT=$(cd "$dir" && func azure functionapp publish "$app_name" --no-build 2>&1) || true
+  echo "$PUBLISH_OUTPUT"
+
+  if ! echo "$PUBLISH_OUTPUT" | grep -q "Deployment completed successfully"; then
+    fail "$folder" "func publish" "Deployment did not complete — check output above. Ensure '$app_name' exists in Azure portal and you are logged in."
+    return 1
+  fi
+
+  # ── Restart to pick up triggers ───────────────
+  log "Restarting '$app_name' to finalize trigger registration..."
+  az functionapp restart \
+    --name "$app_name" \
+    --resource-group "$RESOURCE_GROUP" \
+    --output none \
+    || warn "Restart command failed — app may already be running. Continuing."
+
+  # ── Wait for cold start ───────────────────────
+  log "Waiting 30 seconds for the function host to start..."
+  sleep 30
+
+  # ── Manual trigger sync ───────────────────────
+  log "Forcing trigger sync via REST API..."
+  local access_token
+  access_token=$(az account get-access-token --resource "https://management.azure.com/" --query "accessToken" -o tsv)
+  local subscription_path="subscriptions/${SUBSCRIPTION_ID}/resourceGroups/${RESOURCE_GROUP}/providers/Microsoft.Web/sites/${app_name}"
+  local sync_response
+  sync_response=$(curl -s -o /dev/null -w "%{http_code}" \
+    -X POST \
+    "https://management.azure.com/${subscription_path}/syncfunctiontriggers?api-version=2022-03-01" \
+    -H "Authorization: Bearer ${access_token}" \
+    -H "Content-Type: application/json")
+
+  if [[ "$sync_response" == "200" || "$sync_response" == "204" ]]; then
+    success "Trigger sync succeeded (HTTP ${sync_response})."
+  else
+    warn "Trigger sync returned HTTP ${sync_response} — functions may still work. Check the Azure portal."
+  fi
+
+  # ── Health check ──────────────────────────────
+  log "Verifying function app is responding..."
+  local app_url="https://${app_name}.azurewebsites.net"
+  local health_status
+  health_status=$(curl -s -o /dev/null -w "%{http_code}" "${app_url}/api/health" --max-time 15 || echo "000")
+
+  if [[ "$health_status" == "200" ]]; then
+    success "Health check passed at ${app_url}/api/health"
+  else
+    warn "Health check returned HTTP ${health_status} — the host may still be cold-starting. Try: curl ${app_url}/api/health"
+  fi
 
   success "✔ $app_name deployed."
   success "Portal: https://portal.azure.com/#resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$app_name/overview"
 }
 
 for folder in "${TARGETS[@]}"; do
+  if [[ " ${SKIPPED[*]:-} " == *" $folder "* ]]; then
+    continue
+  fi
   if deploy_function "$folder"; then
-    DEPLOYED+=("$folder")
+    if [[ " ${SKIPPED[*]:-} " != *" $folder "* ]]; then
+      DEPLOYED+=("$folder")
+    fi
   else
     FAILED+=("$folder")
   fi
@@ -251,6 +286,7 @@ done
 # ──────────────────────────────────────────────
 header "📊 Deploy Summary"
 [[ ${#DEPLOYED[@]} -gt 0 ]] && success "Deployed (${#DEPLOYED[@]}): ${DEPLOYED[*]}"
+[[ ${#SKIPPED[@]} -gt 0 ]]  && warn    "Skipped  (${#SKIPPED[@]}): ${SKIPPED[*]} — already exist, use --force to redeploy"
 if [[ ${#FAILED[@]} -gt 0 ]]; then
   echo -e "\033[1;31m✖  Failed  (${#FAILED[@]}): ${FAILED[*]}\033[0m" >&2
   echo -e "\033[1;33m   ➜ Scroll up for per-failure remedies.\033[0m" >&2
