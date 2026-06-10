@@ -217,7 +217,7 @@ deploy_function() {
   PUBLISH_OUTPUT=$(cd "$dir" && func azure functionapp publish "$app_name" --no-build 2>&1) || true
   echo "$PUBLISH_OUTPUT"
 
-  if ! echo "$PUBLISH_OUTPUT" | grep -q "Deployment completed successfully"; then
+  if ! echo "$PUBLISH_OUTPUT" | grep -qE "Deployment completed successfully|The deployment was successful"; then
     fail "$folder" "func publish" "Deployment did not complete — check output above. Ensure '$app_name' exists in Azure portal and you are logged in."
     return 1
   fi
@@ -263,6 +263,11 @@ deploy_function() {
   else
     warn "Health check returned HTTP ${health_status} — the host may still be cold-starting. Try: curl ${app_url}/api/health"
   fi
+
+  # ── Postman collection ────────────────────────
+  log "Generating Postman collection..."
+  bash "$ROOT_DIR/generate-postman-collection.sh" "$folder" "$app_url" \
+    || warn "Postman collection generation failed — skipping. Run manually: ./generate-postman-collection.sh $folder $app_url"
 
   success "✔ $app_name deployed."
   success "Portal: https://portal.azure.com/#resource/subscriptions/$SUBSCRIPTION_ID/resourceGroups/$RESOURCE_GROUP/providers/Microsoft.Web/sites/$app_name/overview"

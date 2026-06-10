@@ -1,0 +1,20 @@
+By using the Motivational Insult API, you agree to the following terms:
+
+1. PERMITTED USE
+   This API is provided for entertainment, development, and testing purposes. You may integrate it into applications, bots, and services.
+
+2. PROHIBITED USE
+   You may not use this API to target, harass, or demean specific individuals. Automated bulk calls beyond your subscribed quota are prohibited.
+
+3. AVAILABILITY
+   This API is provided as-is with no uptime guarantee. Best-effort availability
+   is maintained on the Azure consumption plan.
+
+4. QUOTA
+   Free tier users are limited to 50 requests per month. Exceeding quota requires an upgrade to the Pro plan.
+
+5. CHANGES
+   Terms and pricing may be updated at any time. Continued use constitutes acceptance of updated terms.
+
+6. CONTACT
+   For support or abuse reports, contact the provider via the RapidAPI messaging system.
